@@ -1,0 +1,401 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+
+       Copyright 2010-2016 the original author or authors.
+
+       Licensed under the Apache License, Version 2.0 (the "License");
+       you may not use this file except in compliance with the License.
+       You may obtain a copy of the License at
+
+          http://www.apache.org/licenses/LICENSE-2.0
+
+       Unless required by applicable law or agreed to in writing, software
+       distributed under the License is distributed on an "AS IS" BASIS,
+       WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+       See the License for the specific language governing permissions and
+       limitations under the License.
+
+-->
+<beans xmlns="http://www.springframework.org/schema/beans"
+       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+       xmlns:tx="http://www.springframework.org/schema/tx"
+       xmlns:jdbc="http://www.springframework.org/schema/jdbc"
+       xmlns:context="http://www.springframework.org/schema/context"
+       xmlns:mybatis="http://mybatis.org/schema/mybatis-spring"
+	   xmlns:util="http://www.springframework.org/schema/util"
+       xsi:schemaLocation="http://www.springframework.org/schema/context http://www.springframework.org/schema/context/spring-context.xsd
+     http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans.xsd
+     http://www.springframework.org/schema/jdbc http://www.springframework.org/schema/jdbc/spring-jdbc.xsd
+     http://www.springframework.org/schema/tx http://www.springframework.org/schema/tx/spring-tx.xsd
+     http://mybatis.org/schema/mybatis-spring http://mybatis.org/schema/mybatis-spring.xsd http://www.springframework.org/schema/util http://www.springframework.org/schema/util/spring-util.xsd">
+
+
+	
+   <!-- Postgresql datasource -->
+    <bean id="dataSource" class="org.apache.commons.dbcp2.BasicDataSource" destroy-method="close">
+        <property name="driverClassName" value="${db.driverClassName}" />
+		<property name="url" value="${db.url}" />
+		<property name="username" value="${db.username}" />
+		<property name="password" value="${db.password}" />
+		<property name="removeAbandonedOnBorrow" value="true"/>
+		<property name="initialSize" value="10" />
+		<property name="maxTotal" value="20" />
+		<property name="maxIdle" value="5" />
+		<property name="minIdle" value="0" />
+		<property name="maxWaitMillis" value="90000" />
+		<property name="minEvictableIdleTimeMillis" value="900000" />
+		<property name="softMinEvictableIdleTimeMillis" value="900000" />
+		<property name="validationQuery" value="select 1" />
+		<property name="validationQueryTimeout" value="90" />
+		<property name="defaultTransactionIsolation" value="1" />
+    </bean>
+
+    <!-- For transaction manager, using DataSourceTransactionManager" since we are using JDBC local tx -->
+    <bean id="transactionManager" class="org.springframework.jdbc.datasource.DataSourceTransactionManager">
+        <property name="dataSource" ref="dataSource" />
+		<property name="defaultTimeout" value="300" />
+    </bean>
+	
+	<!-- enable transaction demarcation with annotations -->
+    <tx:annotation-driven />
+	
+	<bean id="igniteSpringBean" class="org.apache.ignite.IgniteSpringBean">
+		<property name="configuration">
+			<bean id="grid.cfg" class="org.apache.ignite.configuration.IgniteConfiguration">
+				<property name="peerClassLoadingEnabled" value="true"/>
+				
+				<property name="memoryConfiguration">
+				<bean class="org.apache.ignite.configuration.MemoryConfiguration">
+					<!-- Setting a name of the default memory policy -->
+					<property name="defaultMemoryPolicyName" value="Default_Region"/>
+					<!-- Setting the page size to 4 KB -->
+					<property name="pageSize" value="4096"/>
+					<!-- Setting the initial size of memory region reserved for system cache to 50 MB -->
+					<property name="systemCacheInitialSize" value="#{50 * 1024 * 1024}"/>
+					<!-- Setting the maximum size of memory region reserved for system cache to 125 MB -->
+					<property name="systemCacheMaxSize" value="#{125 * 1024 * 1024}"/>
+					
+					<!-- Defining several memory policies for different memory regions -->
+					<property name="memoryPolicies">
+						<list>
+							<bean class="org.apache.ignite.configuration.MemoryPolicyConfiguration">
+								<property name="name" value="Default_Region"/>
+								<!-- Memory region of 100 MB initial size. -->
+								<property name="initialSize" value="#{100 * 1024 * 1024}"/>
+								<!-- Maximum size is 500 MB. -->
+								<property name="maxSize" value="#{500 * 1024 * 1024}"/>
+								<!-- Enabling eviction for this memory region -->
+								<property name="pageEvictionMode" value="RANDOM_2_LRU"/>
+								<!-- Threshold of 80% for memory pages eviction initiation -->
+								<property name="evictionThreshold" value="0.8"/>
+							</bean>
+						</list>
+					</property>
+				</bean>
+				</property>
+				
+				<property name="igniteInstanceName" value="ObjectManagerGrid"/>
+				<property name="clientMode" value="false"/>
+		
+				<property name="discoverySpi">
+					<bean class="org.apache.ignite.spi.discovery.tcp.TcpDiscoverySpi">
+						<property name="ipFinder">
+							<!--<bean class="org.apache.ignite.spi.discovery.tcp.ipfinder.vm.TcpDiscoveryVmIpFinder">-->
+							<bean class="org.apache.ignite.spi.discovery.tcp.ipfinder.multicast.TcpDiscoveryMulticastIpFinder">
+								<property name="multicastGroup" value="224.1.4.3"/>
+							</bean>
+						</property>
+					</bean>
+				</property>
+		
+				<property name="CacheStoreSessionListenerFactories">
+					<list>
+						<bean class="javax.cache.configuration.FactoryBuilder$SingletonFactory">
+							<constructor-arg>
+								<bean class="org.apache.ignite.cache.store.spring.CacheSpringStoreSessionListener">
+									<!-- Inject transaction manager. -->
+									<property name="transactionManager" ref="transactionManager"/>
+								</bean>
+							</constructor-arg>
+						</bean>
+					</list>
+				</property>
+		
+				<property name="cacheConfiguration">
+					<list>
+						<bean class="org.apache.ignite.configuration.CacheConfiguration">
+							<property name="name" value="DeptCache"/>
+							<property name="cacheMode" value="REPLICATED"/>
+							<property name="atomicityMode" value="TRANSACTIONAL"/>
+							<property name="memoryPolicyName" value="Default_Region"/>
+							<property name="sqlSchema" value="Depts"/>
+
+							<property name="cacheStoreFactory">
+								<bean class="org.apache.ignite.cache.store.jdbc.CacheJdbcPojoStoreFactory">
+									<property name="dataSourceBean" value="dataSource"/>
+									<property name="dialect">
+										<bean class="org.apache.ignite.cache.store.jdbc.dialect.BasicJdbcDialect">
+										</bean>
+									</property>
+
+									<property name="types">
+										<list>
+											<bean class="org.apache.ignite.cache.store.jdbc.JdbcType">
+												<property name="cacheName" value="DeptCache"/>
+												<property name="keyType" value="java.lang.String"/>
+												<property name="valueType" value="com.brocade.dcm.domain.model.Dept"/>
+												<property name="databaseSchema" value="dcm"/>
+												<property name="databaseTable" value="dept"/>
+
+												<property name="keyFields">
+													<list>
+														<bean class="org.apache.ignite.cache.store.jdbc.JdbcTypeField">
+															<constructor-arg>
+																<util:constant static-field="java.sql.Types.VARCHAR"/>
+															</constructor-arg>
+															<constructor-arg value="deptid"/>
+															<constructor-arg value="java.lang.String"/>
+															<constructor-arg value="deptid"/>
+														</bean>
+													</list>
+												</property>
+
+												<property name="valueFields">
+													<list>
+														<bean class="org.apache.ignite.cache.store.jdbc.JdbcTypeField">
+															<constructor-arg>
+																<util:constant static-field="java.sql.Types.VARCHAR"/>
+															</constructor-arg>
+															<constructor-arg value="dname"/>
+															<constructor-arg value="java.lang.String"/>
+															<constructor-arg value="dname"/>
+														</bean>
+
+														<bean class="org.apache.ignite.cache.store.jdbc.JdbcTypeField">
+															<constructor-arg>
+																<util:constant static-field="java.sql.Types.VARCHAR"/>
+															</constructor-arg>
+															<constructor-arg value="loc"/>
+															<constructor-arg value="java.lang.String"/>
+															<constructor-arg value="loc"/>
+														</bean>
+													</list>
+												</property>
+											</bean>
+										</list>
+									</property>
+								</bean>
+							</property>
+
+							<property name="readThrough" value="true"/>
+							<property name="writeThrough" value="true"/>
+							<property name="statisticsEnabled" value="true"/>
+							<property name="managementEnabled" value="true"/>
+
+							<property name="queryEntities">
+								<list>
+									<bean class="org.apache.ignite.cache.QueryEntity">
+										<property name="keyType" value="java.lang.String"/>
+										<property name="valueType" value="com.brocade.dcm.domain.model.Dept"/>
+										<property name="tableName" value="dept"/>
+										<property name="keyFieldName" value="deptid"/>
+
+										<property name="fields">
+											<map>
+												<entry key="dname" value="java.lang.String"/>
+												<entry key="loc" value="java.lang.String"/>
+												<entry key="deptid" value="java.lang.String"/>
+											</map>
+										</property>
+
+										<property name="indexes">
+											<list>
+												<bean class="org.apache.ignite.cache.QueryIndex">
+													<property name="name" value="dnameIndx"/>
+													<property name="indexType" value="FULLTEXT"/>
+
+													<property name="fields">
+														<map>
+															<entry key="dname" value="true"/>
+														</map>
+													</property>
+												</bean>
+											</list>
+										</property>
+									</bean>
+								</list>
+							</property>
+						</bean>
+
+						<bean class="org.apache.ignite.configuration.CacheConfiguration">
+							<property name="name" value="EmpCache"/>
+							<property name="cacheMode" value="REPLICATED"/>
+							<property name="atomicityMode" value="TRANSACTIONAL"/>
+							<property name="memoryPolicyName" value="Default_Region"/>
+							<property name="sqlSchema" value="Emps"/>
+
+							<property name="cacheStoreFactory">
+								<bean class="org.apache.ignite.cache.store.jdbc.CacheJdbcPojoStoreFactory">
+									<property name="dataSourceBean" value="dataSource"/>
+									<property name="dialect">
+										<bean class="org.apache.ignite.cache.store.jdbc.dialect.BasicJdbcDialect">
+										</bean>
+									</property>
+
+									<property name="types">
+										<list>
+											<bean class="org.apache.ignite.cache.store.jdbc.JdbcType">
+												<property name="cacheName" value="EmpCache"/>
+												<property name="keyType" value="java.lang.String"/>
+												<property name="valueType" value="com.brocade.dcm.domain.model.Emp"/>
+												<property name="databaseSchema" value="dcm"/>
+												<property name="databaseTable" value="emp"/>
+
+												<property name="keyFields">
+													<list>
+														<bean class="org.apache.ignite.cache.store.jdbc.JdbcTypeField">
+															<constructor-arg>
+																<util:constant static-field="java.sql.Types.VARCHAR"/>
+															</constructor-arg>
+															<constructor-arg value="empid"/>
+															<constructor-arg value="java.lang.String"/>
+															<constructor-arg value="empid"/>
+														</bean>
+													</list>
+												</property>
+
+												<property name="valueFields">
+													<list>
+														<bean class="org.apache.ignite.cache.store.jdbc.JdbcTypeField">
+															<constructor-arg>
+																<util:constant static-field="java.sql.Types.VARCHAR"/>
+															</constructor-arg>
+															<constructor-arg value="ename"/>
+															<constructor-arg value="java.lang.String"/>
+															<constructor-arg value="ename"/>
+														</bean>
+
+														<bean class="org.apache.ignite.cache.store.jdbc.JdbcTypeField">
+															<constructor-arg>
+																<util:constant static-field="java.sql.Types.VARCHAR"/>
+															</constructor-arg>
+															<constructor-arg value="job"/>
+															<constructor-arg value="java.lang.String"/>
+															<constructor-arg value="job"/>
+														</bean>
+
+														<bean class="org.apache.ignite.cache.store.jdbc.JdbcTypeField">
+															<constructor-arg>
+																<util:constant static-field="java.sql.Types.VARCHAR"/>
+															</constructor-arg>
+															<constructor-arg value="mgr"/>
+															<constructor-arg value="java.lang.String"/>
+															<constructor-arg value="mgr"/>
+														</bean>
+
+														<bean class="org.apache.ignite.cache.store.jdbc.JdbcTypeField">
+															<constructor-arg>
+																<util:constant static-field="java.sql.Types.DATE"/>
+															</constructor-arg>
+															<constructor-arg value="hiredate"/>
+															<constructor-arg value="java.sql.Date"/>
+															<constructor-arg value="hiredate"/>
+														</bean>
+
+														<bean class="org.apache.ignite.cache.store.jdbc.JdbcTypeField">
+															<constructor-arg>
+																<util:constant static-field="java.sql.Types.INTEGER"/>
+															</constructor-arg>
+															<constructor-arg value="sal"/>
+															<constructor-arg value="java.lang.Integer"/>
+															<constructor-arg value="sal"/>
+														</bean>
+
+														<bean class="org.apache.ignite.cache.store.jdbc.JdbcTypeField">
+															<constructor-arg>
+																<util:constant static-field="java.sql.Types.INTEGER"/>
+															</constructor-arg>
+															<constructor-arg value="comm"/>
+															<constructor-arg value="java.lang.Integer"/>
+															<constructor-arg value="comm"/>
+														</bean>
+
+														<bean class="org.apache.ignite.cache.store.jdbc.JdbcTypeField">
+															<constructor-arg>
+																<util:constant static-field="java.sql.Types.VARCHAR"/>
+															</constructor-arg>
+															<constructor-arg value="deptid"/>
+															<constructor-arg value="java.lang.String"/>
+															<constructor-arg value="deptid"/>
+														</bean>
+													</list>
+												</property>
+											</bean>
+										</list>
+									</property>
+								</bean>
+							</property>
+
+							<property name="readThrough" value="true"/>
+							<property name="writeThrough" value="true"/>
+							<property name="statisticsEnabled" value="true"/>
+							<property name="managementEnabled" value="true"/>
+
+							<property name="queryEntities">
+								<list>
+									<bean class="org.apache.ignite.cache.QueryEntity">
+										<property name="keyType" value="java.lang.String"/>
+										<property name="valueType" value="com.brocade.dcm.domain.model.Emp"/>
+										<property name="tableName" value="emp"/>
+										<property name="keyFieldName" value="empid"/>
+
+										<property name="fields">
+											<map>
+												<entry key="ename" value="java.lang.String"/>
+												<entry key="job" value="java.lang.String"/>
+												<entry key="mgr" value="java.lang.String"/>
+												<entry key="hiredate" value="java.sql.Date"/>
+												<entry key="sal" value="java.lang.Integer"/>
+												<entry key="comm" value="java.lang.Integer"/>
+												<entry key="deptid" value="java.lang.String"/>
+												<entry key="empid" value="java.lang.String"/>
+											</map>
+										</property>
+
+										<property name="indexes">
+											<list>
+												<bean class="org.apache.ignite.cache.QueryIndex">
+													<property name="name" value="dcm_emp_ename"/>
+													<property name="indexType" value="SORTED"/>
+
+													<property name="fields">
+														<map>
+															<entry key="ename" value="false"/>
+														</map>
+													</property>
+												</bean>
+											</list>
+										</property>
+									</bean>
+								</list>
+							</property>
+						</bean>
+					</list>
+				</property>
+			</bean>
+		</property>
+	</bean>
+
+    <!-- No need to enable component scanning & autowire as we are using spring boot application component scan feature which will take care (mapper scanning done separately) -->    
+    <!-- <context:component-scan base-package="org.mybatis.jpetstore.service" /> -->
+
+    <!-- define the SqlSessionFactory -->
+    <!-- <bean id="sqlSessionFactory" class="org.mybatis.spring.SqlSessionFactoryBean">
+        <property name="dataSource" ref="dataSource" />
+		<property name="mapperLocations" value="classpath*:com/brocade/dcm/domain/**/*.xml" />
+        <property name="typeAliasesPackage" value="com.brocade.dcm.domain.model" />
+    </bean> -->
+
+    <!-- scan for mappers to let them be autowired. This is needed as spring boot component scan feature does not find MyBatis mappers (not a plain bean so spring would not know how to instantiate it) -->
+    <!-- <mybatis:scan base-package="com.brocade.dcm.domain.mapper" /> -->
+</beans>
